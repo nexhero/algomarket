@@ -1,0 +1,82 @@
+#+title: AlgoCommerce Smart Contract
+* Smart Contract Global Variables.
+** Constans.
+- CONST_USDC:
+  USDC asset id in the Algorand Blockchain.
+** Global Variabels.
+*** oracle_fees.
+Cost for making request.
+For now, the oracle fees will be 0.005 algos.
+*** comission_fees.
+Comission on sell products, it will be 1% for normal sellers and 0.75% for those who paid for a premium.
+*** premium_cost.
+Cost to become a premium seller.
+*** oracle_address.
+*** admin_address
+*** earning
+* Actors.
+** Buyer.
+*** Actions.
+**** DONE postOrder.
+The buyer post paid for products, the oracle check for the transaction and validate it.
+This action require:
+a) AppCall args [post_order].
+b) Asset (USDC) transfer to the smart contract address.
+c) Payment to the Oracle address.
+**** DONE cancelOrder.
+The buyer use this action to cancel orders, the smart contract will check if there is deposit aviable,
+if there is usdc deposited, the oracle will check for the transaction.
+This Action require:
+- AppCall args [cancel_order].
+- Payment to the Oracle address.
+*** Variables.
+**** deposit.
+This local variable hold usdc until the seller user decide to accept the order.
+** Seller.
+*** Actions
+**** DONE setPremium.
+A seller can become a premium user, by doing this, the comission fees and oracle fees become lower.
+This action require:
++ AppCall args [set_premium]
++ Payment to smart contract address
+**** HOLD acceptOrder.
+Seller accept order from the buyer.
+This action require:
+- AppCall args[accept_order].
+- Payment to the Oracle address.
+**** HOLD rejectOrder.
+The seller reject the order from the buyer.
+This action require:
+- AppCall args [reject_order].
+- Payment to the Oracle address.
+*** Variables.
+**** income.
+Store all the incoming usdc for selling products
+**** premium.
+Flag variable to manage if the seller is a premium.
+** Oracle.
+*** Actions.
+**** TODO oCancelOrder.
+This is a callback when buyer decided to cancel the order
+**** TODO oTakeOrder.
+Callback when the seller take the order.
+** Admin.
+*** Actions.
+**** TODO withdraw.
+***** Withdraw usdc.
+***** Withdraw algos
+**** HOLD setup.
+Setup the asset and oracle address
+* Utils Functions.
+** DONE isAddrAdmin(addr).
+** DONE isAddrOracle(addr).
+** DONE isPremium(addr).
+** DONE setPremium(addr).
+** DONE getDeposit(addr),
+** DONE getIncome(addr),
+** DONE getTokenBalance().
+** DONE sellerWithdraw(account,amount).
+** IDEA buyerWithdraw(account,amount).
+** DONE calcCommission(amount,is_premium),
+** DONE moveFunds(_from,_to,amount).
+** DONE usdcWithdraw(account,amount).
