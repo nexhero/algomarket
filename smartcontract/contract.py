@@ -14,9 +14,6 @@ from beaker import (
     consts
 )
 
-__USDC_ID : int
-"""Define the usdc asset in the mainnet"""
-__USDC_ID = 98_430_563
 
 class Ecommerce(Application):
     """This smartcontract worsk as escrow between buyer and sellers, is the main point entrace to make request
@@ -28,19 +25,31 @@ class Ecommerce(Application):
 
     admin: Final[ApplicationStateValue] = ApplicationStateValue(
         stack_type = TealType.bytes,
+        key=Bytes("a"),
         default=Global.creator_address(),
         descr="The address that can administrate the smartcontract."
     )
     """Define who can administrate the smartcontract"""
 
+    token: Final[ApplicationStateValue] = ApplicationStateValue(
+
+        stack_type=TealType.uint64,
+        key=Bytes("t"),
+        default = Int(0),
+        descr="Store the token it will use for transactions, for now just usdc."
+    )
+    """Token used for trading."""
     oracle: Final[ApplicationStateValue] = ApplicationStateValue(
         stack_type=TealType.bytes,
+        key=Bytes("o"),
+        default=Global.creator_address(),
         descr="The oracle address that receive all the request."
     )
     """Define the oracle address."""
 
-    earnig: Final[ApplicationStateValue] = ApplicationStateValue(
+    earning: Final[ApplicationStateValue] = ApplicationStateValue(
         stack_type=TealType.uint64,
+        key=Bytes("e"),
         default=Int(0),
         descr="Acomulate the fees that smartcontract made for selling products"
     )
@@ -48,6 +57,7 @@ class Ecommerce(Application):
 
     comission_fees: Final[ApplicationStateValue] = ApplicationStateValue(
         stack_type=TealType.uint64,
+        key=Bytes("cf"),
         default=Int(1000),
         descr="Store the fees that seller pay for selling products"
     )
@@ -55,6 +65,7 @@ class Ecommerce(Application):
 
     oracle_fees: Final[ApplicationStateValue] = ApplicationStateValue(
         stack_type=TealType.uint64,
+        key=Bytes("of"),
         default = Int(10000),
         descr="Store the fees that all user pay for making request to the oracle."
     )
@@ -128,6 +139,33 @@ class Ecommerce(Application):
         """Check if the sender is the administrator for the smarcontract."""
         return If( Txn.sender() == self.admin, Return(Int(1)),Return(Int(0)))
 
+    @external(authorize=Authorize.only(Global.creator_address()))
+    def setup(self,
+              t: abi.PaymentTransaction,
+              asset: abi.Asset,
+              *,output:abi.Uint64):
+        """The contract receive some algos and opt-in into the token to use for trading."""
+        return Seq(
+            Assert(
+                t.get().receiver() == self.address
+            ),
+            InnerTxnBuilder.Begin(),
+            InnerTxnBuilder.SetFields(
+                {
+                    TxnField.type_enum: TxnType.AssetTransfer,
+                    TxnField.xfer_asset: asset.asset_id(),
+                    TxnField.asset_amount: Int(0),
+                    TxnField.asset_receiver: self.address,
+                }
+            ),
+            InnerTxnBuilder.Submit(),
+            self.token.set(asset.asset_id()),
+            output.set(Int(1))
+        )
+
+
+
+
     @internal(TealType.uint64)
     def isOracleAddr(self):
         """Check if the sender is the oracle address"""
@@ -152,7 +190,7 @@ class Ecommerce(Application):
             output.set(Int(1)),
         )
     @external
-    def setSeller(self,p: abi.PaymentTransaction,*,output: abit.Uint64):
+    def setSeller(self,p: abi.PaymentTransaction,*,output: abi.Uint64):
         """Pay some algos and become a seller, the algos goes to the insured amount"""
         return Seq(
             Assert(
@@ -171,56 +209,67 @@ class Ecommerce(Application):
             InnerTxnBuilder.SetFields(
                 {
                     TxnField.type_enum: TxnType.AssetTransfer,
-                    TxnField.xfer_asset: aid,
+                    TxnField.xfer_asset: Int(2), # TODO: Make a global variable to store usdc token id
                     TxnField.asset_amount: amt,
                     TxnField.asset_receiver: addr,
                 }
             ),
             InnerTxnBuilder.Submit(),
+
         )
 
+    @external
+    def sellerWithdraw(self,amt: abi.Uint64,*,output: abi.Uint64):
+        """A seller make a withdraw of USDC tokens."""
+        return Seq(
+            Assert(
+                self.income >= amt.get()
+            ),
+            self.withdrawUSDC(Txn.sender(),amt.get()),
+            self.income.set(self.income - amt.get()),
+            output.set(Int(1))
+        )
+
+# if __name__ == "__main__":
+#     from algosdk.atomic_transaction_composer import AccountTransactionSigner, TransactionWithSigner
+#     from algosdk import account, encoding, mnemonic, future
+#     from beaker import sandbox, client, Application
+
+#     admin = "season purchase grape abstract donkey dinner field judge piece trick garlic usage present man suffer there into crawl regret toast festival liar police abandon smooth"
+#     admin_pk = mnemonic.to_public_key(admin)
+#     admin_sk = mnemonic.to_private_key(admin)
+
+#     seller = "unfair gold proud cradle raw unknown nominee zebra alley habit ready joke impact type solution valid exile arrange tilt camera gather sausage weather absorb prepare"
+#     seller_pk = mnemonic.to_public_key(seller)
+#     seller_sk = mnemonic.to_private_key(seller)
+
+#     signer = AccountTransactionSigner(admin_sk)
+#     app = Ecommerce()
+#     algod_client = sandbox.get_client()
+#     app_client = client.ApplicationClient(algod_client,app,15,signer=signer)
+
+#     sp = app_client.client.suggested_params()
+#     ptxn = TransactionWithSigner(
+#         txn=future.transaction.PaymentTxn(
+#             admin_pk,sp,seller_pk,amt=100000
+#         ),
+#         signer=signer,
+#     )
 
 
-if __name__ == "__main__":
-    from algosdk.atomic_transaction_composer import AccountTransactionSigner, TransactionWithSigner
-    from algosdk import account, encoding, mnemonic, future
-    from beaker import sandbox, client, Application
-
-    admin = "season purchase grape abstract donkey dinner field judge piece trick garlic usage present man suffer there into crawl regret toast festival liar police abandon smooth"
-    admin_pk = mnemonic.to_public_key(admin)
-    admin_sk = mnemonic.to_private_key(admin)
-
-    seller = "unfair gold proud cradle raw unknown nominee zebra alley habit ready joke impact type solution valid exile arrange tilt camera gather sausage weather absorb prepare"
-    seller_pk = mnemonic.to_public_key(seller)
-    seller_sk = mnemonic.to_private_key(seller)
-
-    signer = AccountTransactionSigner(admin_sk)
-    app = Ecommerce()
-    algod_client = sandbox.get_client()
-    app_client = client.ApplicationClient(algod_client,app,15,signer=signer)
-
-    sp = app_client.client.suggested_params()
-    ptxn = TransactionWithSigner(
-        txn=future.transaction.PaymentTxn(
-            admin_pk,sp,seller_pk,amt=100000
-        ),
-        signer=signer,
-    )
-
-
-    # app_id, app_addr, txid = app_client.create()
-    # print(f"Created App with id: {app_id} and address addr:{app_addr} in tx:{txid}")
-    # r = app_client.opt_in()
-    print("Updating App...")
-    r = app_client.update()
-    print(r)
-    print("----")
-    # r = app_client.call(app.setPremium,p=ptxn)
-    # print(r.return_value)
-    # r = app_client.call(app.setAdminAddr)
-    # print(f"Set new admin:{r.return_value}")
-    # r = app_client.call(app.getAdminAddr)
-    # print(f"The admin addr is:{r.return_value}")
-    # is_admin = app_client.call(app.isAddrAdmin)
-    # print(f"sender is admin?:{is_admin.return_value}")
-    #
+#     # app_id, app_addr, txid = app_client.create()
+#     # print(f"Created App with id: {app_id} and address addr:{app_addr} in tx:{txid}")
+#     # r = app_client.opt_in()
+#     print("Updating App...")
+#     r = app_client.update()
+#     print(r)
+#     print("----")
+#     # r = app_client.call(app.setPremium,p=ptxn)
+#     # print(r.return_value)
+#     # r = app_client.call(app.setAdminAddr)
+#     # print(f"Set new admin:{r.return_value}")
+#     # r = app_client.call(app.getAdminAddr)
+#     # print(f"The admin addr is:{r.return_value}")
+#     # is_admin = app_client.call(app.isAddrAdmin)
+#     # print(f"sender is admin?:{is_admin.return_value}")
+#     #
