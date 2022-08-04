@@ -23,6 +23,14 @@ class Ecommerce(Application):
     # DEFINE ALL GLOBAL STATE FOR THE SMARTCONTRACT #
     #################################################
 
+    _oracle_fees = 1000
+    """Default oracle fees cost"""
+    _comission_fees = 1000
+    """Default comission for sellers"""
+    _premium_cost = 3000
+    """Default cost to become a premium seller."""
+    _seller_cost = 4000
+    """Default cost to be a seller"""
     admin: Final[ApplicationStateValue] = ApplicationStateValue(
         stack_type = TealType.bytes,
         key=Bytes("a"),
@@ -58,7 +66,7 @@ class Ecommerce(Application):
     comission_fees: Final[ApplicationStateValue] = ApplicationStateValue(
         stack_type=TealType.uint64,
         key=Bytes("cf"),
-        default=Int(1000),
+        default=Int(_comission_fees),
         descr="Store the fees that seller pay for selling products"
     )
     """This is the percent that seller pay for selling products"""
@@ -66,21 +74,23 @@ class Ecommerce(Application):
     oracle_fees: Final[ApplicationStateValue] = ApplicationStateValue(
         stack_type=TealType.uint64,
         key=Bytes("of"),
-        default = Int(10000),
+        default = Int(_oracle_fees),
         descr="Store the fees that all user pay for making request to the oracle."
     )
     """The cost for making request to the oracle"""
 
     seller_insurance: Final[ApplicationStateValue] = ApplicationStateValue(
         stack_type=TealType.uint64,
-        default = Int(1000),
+        key=Bytes("si"),
+        default = Int(_seller_cost),
         descr="If an user become a seller, it must pay some algos, the amount of algo deposited is used to insurance the seller,"
     )
     """Cost for becoming a seller, this algos will use as insurance."""
 
     premium_cost: Final[ApplicationStateValue] = ApplicationStateValue(
         stack_type=TealType.uint64,
-        default = Int(100000),
+        key = Bytes("pc"),
+        default = Int(_premium_cost),
         descr="The price that seller must pay to become a premium seller, this will reduce the comission fees."
     )
     """Define the cost for a seller to become a premium, by doing this, seller receive a discont on sell comission."""
@@ -92,24 +102,28 @@ class Ecommerce(Application):
 
     deposit: Final[AccountStateValue] = AccountStateValue(
         stack_type=TealType.uint64,
+        key=Bytes("d"),
         default = Int(0),
         descr="Usdc currently deposit for the buyer user."
     )
     """Current usdc buyer deposited."""
     income: Final[AccountStateValue] =AccountStateValue(
         stack_type=TealType.uint64,
+        key=Bytes("i"),
         default=Int(0),
         descr="USDC currently for the seller user."
     )
     """Available usdc for the seller."""
     is_seller: Final[AccountStateValue] = AccountStateValue(
         stack_type=TealType.uint64,
+        key=Bytes("is"),
         default=Int(0),
         descr="Flag, is the address a seller user."
     )
     """Flag manage is the account is a seller."""
     is_premium: Final[AccountStateValue] = AccountStateValue(
         stack_type=TealType.uint64,
+        key=Bytes("ip"),
         default=Int(0),
         descr="Address that paid for a premium."
     )
@@ -182,13 +196,16 @@ class Ecommerce(Application):
         return Seq(
             Assert(
                 self.isPremiumSeller() == Int(0),
+                self.is_seller == Int(1), # Needs to be a seller
                 Global.group_size() == Int(2),
                 p.get().receiver() == Global.current_application_address(),
                 p.get().amount() >= self.premium_cost
 
             ),
+            self.is_premium.set(Int(1)),
             output.set(Int(1)),
         )
+
     @external
     def setSeller(self,p: abi.PaymentTransaction,*,output: abi.Uint64):
         """Pay some algos and become a seller, the algos goes to the insured amount"""
@@ -198,6 +215,7 @@ class Ecommerce(Application):
                 p.get().receiver() == Global.current_application_address(),
                 p.get().amount() >= self.seller_insurance,
             ),
+            self.is_seller.set(Int(1)),
             output.set(Int(1))
         )
 
@@ -229,47 +247,3 @@ class Ecommerce(Application):
             self.income.set(self.income - amt.get()),
             output.set(Int(1))
         )
-
-# if __name__ == "__main__":
-#     from algosdk.atomic_transaction_composer import AccountTransactionSigner, TransactionWithSigner
-#     from algosdk import account, encoding, mnemonic, future
-#     from beaker import sandbox, client, Application
-
-#     admin = "season purchase grape abstract donkey dinner field judge piece trick garlic usage present man suffer there into crawl regret toast festival liar police abandon smooth"
-#     admin_pk = mnemonic.to_public_key(admin)
-#     admin_sk = mnemonic.to_private_key(admin)
-
-#     seller = "unfair gold proud cradle raw unknown nominee zebra alley habit ready joke impact type solution valid exile arrange tilt camera gather sausage weather absorb prepare"
-#     seller_pk = mnemonic.to_public_key(seller)
-#     seller_sk = mnemonic.to_private_key(seller)
-
-#     signer = AccountTransactionSigner(admin_sk)
-#     app = Ecommerce()
-#     algod_client = sandbox.get_client()
-#     app_client = client.ApplicationClient(algod_client,app,15,signer=signer)
-
-#     sp = app_client.client.suggested_params()
-#     ptxn = TransactionWithSigner(
-#         txn=future.transaction.PaymentTxn(
-#             admin_pk,sp,seller_pk,amt=100000
-#         ),
-#         signer=signer,
-#     )
-
-
-#     # app_id, app_addr, txid = app_client.create()
-#     # print(f"Created App with id: {app_id} and address addr:{app_addr} in tx:{txid}")
-#     # r = app_client.opt_in()
-#     print("Updating App...")
-#     r = app_client.update()
-#     print(r)
-#     print("----")
-#     # r = app_client.call(app.setPremium,p=ptxn)
-#     # print(r.return_value)
-#     # r = app_client.call(app.setAdminAddr)
-#     # print(f"Set new admin:{r.return_value}")
-#     # r = app_client.call(app.getAdminAddr)
-#     # print(f"The admin addr is:{r.return_value}")
-#     # is_admin = app_client.call(app.isAddrAdmin)
-#     # print(f"sender is admin?:{is_admin.return_value}")
-#     #
