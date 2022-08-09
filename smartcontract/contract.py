@@ -31,6 +31,15 @@ class Ecommerce(Application):
     """Default cost to become a premium seller."""
     _seller_cost = 4000
     """Default cost to be a seller"""
+
+    app_name: Final[ApplicationStateValue] = ApplicationStateValue(
+        stack_type=TealType.bytes,
+        key=Bytes("app_name"),
+        default = Bytes("algomarket"),
+        descr="Define the application name for the oracle."
+    )
+    """Define the application name for the Oracle to reconize the request."""
+
     admin: Final[ApplicationStateValue] = ApplicationStateValue(
         stack_type = TealType.bytes,
         key=Bytes("a"),
@@ -102,7 +111,7 @@ class Ecommerce(Application):
 
     deposit: Final[AccountStateValue] = AccountStateValue(
         stack_type=TealType.uint64,
-        key=Bytes("d"),
+
         default = Int(0),
         descr="Usdc currently deposit for the buyer user."
     )
@@ -129,19 +138,13 @@ class Ecommerce(Application):
     )
     """Flag manage is the seller paid for a premium service."""
 
-    @update
-    def update(self):
-        return Seq(
-            self.admin.set(Bytes("Random Text")),
-            Approve()
-        )
     @create
     def create(self):
         """On deploy application."""
         return Seq(
             self.initialize_application_state(),
             self.admin.set(Txn.sender())
-            )
+        )
 
     @opt_in
     def opt_in(self):
@@ -177,19 +180,48 @@ class Ecommerce(Application):
             output.set(Int(1))
         )
 
-
-
-
     @internal(TealType.uint64)
     def isOracleAddr(self):
         """Check if the sender is the oracle address"""
         return If(Txn.sender() == self.oracle, Return(Int(1)),Return(Int(0)))
 
     @internal(TealType.uint64)
+    def isSeller(self):
+        return self.is_seller
+
+    @internal(TealType.uint64)
     def isPremiumSeller(self):
         """Check if the sender is a premium seller account"""
         return self.is_premium
 
+    @internal(TealType.none)
+    def withdrawUSDC(self, addr, amt):
+        """Move USDC token to an address"""
+        return Seq(
+            InnerTxnBuilder.Begin(),
+            InnerTxnBuilder.SetFields(
+                {
+                    TxnField.type_enum: TxnType.AssetTransfer,
+                    TxnField.xfer_asset: Int(2), # TODO: Make a global variable to store usdc token id
+                    TxnField.asset_amount: amt,
+                    TxnField.asset_receiver: addr,
+                }
+            ),
+            InnerTxnBuilder.Submit(),
+
+        )
+
+    @external
+    def sellerWithdraw(self,amt: abi.Uint64,*,output: abi.Uint64):
+        """A seller make a withdraw of USDC tokens."""
+        return Seq(
+            Assert(
+                self.income >= amt.get()
+            ),
+            self.withdrawUSDC(Txn.sender(),amt.get()),
+            self.income.set(self.income - amt.get()),
+            output.set(Int(1))
+        )
     @external
     def setPremium(self,p: abi.PaymentTransaction,*,output: abi.Uint64):
         """Set a seller as premium user"""
@@ -219,31 +251,47 @@ class Ecommerce(Application):
             output.set(Int(1))
         )
 
-    @internal(TealType.none)
-    def withdrawUSDC(self, addr, amt):
-        """Move USDC token to an address"""
-        return Seq(
-            InnerTxnBuilder.Begin(),
-            InnerTxnBuilder.SetFields(
-                {
-                    TxnField.type_enum: TxnType.AssetTransfer,
-                    TxnField.xfer_asset: Int(2), # TODO: Make a global variable to store usdc token id
-                    TxnField.asset_amount: amt,
-                    TxnField.asset_receiver: addr,
-                }
-            ),
-            InnerTxnBuilder.Submit(),
+    @external
+    def makeOrder(self,
+                  oracle_pay:abi.PaymentTransaction,
+                  product_pay:abi.AssetTransferTransaction,
+                  token_:abi.Asset,
+                  *,output: abi.Uint64):
 
+        """
+        The buyer send tokens for paying the products and some algos for the oracle service.
+        The oracle will check the transacion and validate the payment, if there is something
+        wrong with it, the oracle will send back the tokens to the buyer.
+        """
+        return Seq(
+            # Verify inputs
+            Assert(
+                # validate de payment to the oracle
+                oracle_pay.get().amount() >= self.oracle_fees,
+                oracle_pay.get().receiver() == self.address, # Must be the oracle address
+                # check for the token
+                token_.asset_id() == self.token,
+                product_pay.get().asset_receiver() == self.address,
+                product_pay.get().xfer_asset() == self.token,
+                product_pay.get().asset_amount() >= Int(0),
+            ),
+            self.deposit.increment(product_pay.get().asset_amount()),
+            output.set(Int(1))
         )
 
     @external
-    def sellerWithdraw(self,amt: abi.Uint64,*,output: abi.Uint64):
-        """A seller make a withdraw of USDC tokens."""
+    def acceptOrder(self,
+                    oracle_pay:abi.PaymentTransaction,
+                    buyer_addr: abi.Account,
+                    *, output: abi.Uint64):
+        """The seller accept the order request from the buyer.
+        The oracle will validate the transacction and move the funds from buyer to the seller."""
         return Seq(
             Assert(
-                self.income >= amt.get()
+                oracle_pay.get().amount() >= self.oracle_fees,
+                oracle_pay.get().receiver() == self.address,
+                App.localGet(buyer_addr.address(),Bytes("deposit")) > Int(0)
+
             ),
-            self.withdrawUSDC(Txn.sender(),amt.get()),
-            self.income.set(self.income - amt.get()),
             output.set(Int(1))
         )

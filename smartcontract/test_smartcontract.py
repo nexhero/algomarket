@@ -106,7 +106,7 @@ class TestEcommerce:
         r = app_client.opt_in()
         client_state = app_client.get_account_state()
         assert client_state[b"i"] == 0, "The initial income must be zero"
-        assert client_state[b"d"] == 0, "The initial deposit must be zero"
+        assert client_state[b"deposit"] == 0, "The initial deposit must be zero"
         assert client_state[b"is"] == 0, "The the account can't be a seller by default"
         assert client_state[b"ip"] == 0, "The seller can't be a premim by default"
 
@@ -116,7 +116,7 @@ class TestEcommerce:
         r = app_client.opt_in()
         client_state = app_client.get_account_state()
         assert client_state[b"i"] == 0, "The initial income must be zero"
-        assert client_state[b"d"] == 0, "The initial deposit must be zero"
+        assert client_state[b"deposit"] == 0, "The initial deposit must be zero"
         assert client_state[b"is"] == 0, "The the account can't be a seller by default"
         assert client_state[b"ip"] == 0, "The seller can't be a premim by default"
     def test_become_seller(self,seller_acc: tuple[str,str,AccountTransactionSigner]):
@@ -147,3 +147,29 @@ class TestEcommerce:
         app_state = app_client.get_account_state()
         assert app_state[b"ip"] == 1, "After paying the cost, the value of is_premium must be 1"
         assert r.return_value == 1, "Application must return 1"
+
+    def test_make_order(self,
+                        seller_acc:tuple[str,str,AccountTransactionSigner],
+                        buyer_acc:tuple[str,str,AccountTransactionSigner]):
+        baddr,bsk,bs = buyer_acc
+        saddr,_,_ = seller_acc
+        app_client = client.ApplicationClient(self.algod_client,self.app,self.app_client.app_id,signer=bs)
+        sp = self.algod_client.suggested_params()
+        app_state = app_client.get_application_state()
+        asset_id =  app_state[b"t"]
+        r = app_client.call(
+            self.app.makeOrder,
+            oracle_pay = TransactionWithSigner(
+                txn=transaction.PaymentTxn(baddr,sp,self.app_client.app_addr,1000,note="paying for the oracle"),
+                signer=bs
+            ),
+            product_pay = TransactionWithSigner(
+                txn=transaction.AssetTransferTxn(baddr,sp,self.app_client.app_addr,2000,asset_id),
+                signer=bs
+            ),
+            token_ = asset_id
+        )
+        local_state = app_client.get_account_state()
+
+        assert r.return_value == 1, "Application must return 1"
+        assert local_state[b"deposit"] == 2000, "The deposit must be equal to 2000"
