@@ -6,6 +6,7 @@ from beaker import (
     create,
     opt_in,
     AccountStateValue,
+    DynamicAccountStateValue,
     ApplicationStateValue,
     Authorize,
     external,
@@ -31,7 +32,7 @@ class Ecommerce(Application):
     """Default cost to become a premium seller."""
     _seller_cost = 4000
     """Default cost to be a seller"""
-
+    __ORDER_LIST_MAX = 10
     app_name: Final[ApplicationStateValue] = ApplicationStateValue(
         stack_type=TealType.bytes,
         key=Bytes("app_name"),
@@ -42,7 +43,6 @@ class Ecommerce(Application):
 
     admin: Final[ApplicationStateValue] = ApplicationStateValue(
         stack_type = TealType.bytes,
-        key=Bytes("a"),
         default=Global.creator_address(),
         descr="The address that can administrate the smartcontract."
     )
@@ -56,7 +56,7 @@ class Ecommerce(Application):
         descr="Store the token it will use for transactions, for now just usdc."
     )
     """Token used for trading."""
-    oracle: Final[ApplicationStateValue] = ApplicationStateValue(
+    oracle_address: Final[ApplicationStateValue] = ApplicationStateValue(
         stack_type=TealType.bytes,
         key=Bytes("o"),
         default=Global.creator_address(),
@@ -100,7 +100,7 @@ class Ecommerce(Application):
         stack_type=TealType.uint64,
         key = Bytes("pc"),
         default = Int(_premium_cost),
-        descr="The price that seller must pay to become a premium seller, this will reduce the comission fees."
+        descr="The price that seller must pay to become a premium sellerr, this will reduce the comission fees."
     )
     """Define the cost for a seller to become a premium, by doing this, seller receive a discont on sell comission."""
 
@@ -116,6 +116,18 @@ class Ecommerce(Application):
         descr="Usdc currently deposit for the buyer user."
     )
     """Current usdc buyer deposited."""
+    order_list: Final[DynamicAccountStateValue] = DynamicAccountStateValue(
+        stack_type=TealType.bytes,
+        max_keys=__ORDER_LIST_MAX,
+        descr="Current order posted by the buyer."
+    )
+    """List of orders posted by the buyer."""
+    order_index: Final[AccountStateValue] = AccountStateValue(
+        stack_type = TealType.uint64,
+        default = Int(0),
+        descr = "Manage the current index for the order list array"
+    )
+
     income: Final[AccountStateValue] =AccountStateValue(
         stack_type=TealType.uint64,
         key=Bytes("i"),
@@ -183,10 +195,11 @@ class Ecommerce(Application):
     @internal(TealType.uint64)
     def isOracleAddr(self):
         """Check if the sender is the oracle address"""
-        return If(Txn.sender() == self.oracle, Return(Int(1)),Return(Int(0)))
+        return If(Txn.sender() == self.oracle_address, Return(Int(1)),Return(Int(0)))
 
     @internal(TealType.uint64)
     def isSeller(self):
+        """Check if the address called is a seller account."""
         return self.is_seller
 
     @internal(TealType.uint64)
@@ -210,6 +223,80 @@ class Ecommerce(Application):
             InnerTxnBuilder.Submit(),
 
         )
+    @internal(TealType.uint64)
+    def getOrderByIndex(self, on_addr, index):
+        """Get the value in the order_list using the index"""
+        # TODO: Validate if the index is out the range
+        return self.order_list[index][on_addr]
+    @internal(TealType.none)
+    def setOrderOnIndex(self,on_addr,index, value):
+        self.order_list[index][on_addr].set(value)
+        
+    @internal(TealType.none)
+    def reBlockOrderList(self,on_addr):
+        """Move the empty index to the end of the array"""
+        temp = ScratchVar(TealType.bytes)
+        next = ScratchVar(TealType.bytes)
+        i = ScratchVar(TealType.uint64)
+        _max = ScratchVar(TealType.uint64)
+        return Seq(
+            _max.store(self.order_index[on_addr]),
+            For(i.store(Int(0)), i.load()< _max.load(), i.store(i.load() + Int(1))).Do(
+                    temp.store(self.getOrderByIndex(on_addr,i.load())),
+                    next.store(self.getOrderByIndex(on_addr,i.load()+Int(1))),
+
+                    If(Len(temp.load()) == 0)
+                    .Then(
+                        self.setOrderOnIndex(on_addr,i.load(),next.load())
+                    ),
+            )
+        )
+
+    @internal(TealType.none)
+    def pushOrder(self,on_addr,order_id):
+        """Add new order to the array and update the index"""
+        # TODO: Only the administrator or the oracle can do this operation
+        return Seq(
+            Assert(
+                Txn.sender() == self.oracle_address, # Only the oracle can do this
+                self.order_index[on_addr] < Int(self.__ORDER_LIST_MAX),
+            ),
+            # self.order_list[self.order_index][on_addr].set(order_id),
+            self.setOrderOnIndex(on_addr,self.order_index[on_addr],order_id),
+            self.order_index[on_addr].increment(Int(0)),
+        )
+    @internal(TealType.bytes)
+    def popOrder(self,on_addr,index):
+        """remove the order id from the array"""
+        # TODO: Only administrator or the oracle can do this operation
+        temp = ScratchVar(TealType.bytes)
+        return Seq(
+            temp.store(self.getOrderByIndex(on_addr,index)),
+            self.setOrderOnIndex(on_addr,index,Bytes("")),
+            self.reBlockOrderList(on_addr),
+            Return(temp.load())
+        )
+
+    @internal(TealType.uint64)
+    def searchOrderIndex(self,on_addr,order_id):
+        """
+        Check if the account has the order on his list, and return the index,
+        Return 0 if doesn't has the order, otherwise return the index + 1,
+        because pyteal do not support negative numbers.
+        """
+        i = ScratchVar(TealType.uint64)
+        r = ScratchVar(TealType.uint64) # the return value
+        return Seq(
+            r.store(Int(0)),
+            For(i.store(Int(0)), i.load() < self.__ORDER_LIST_MAX, i.store(i.load() + Int(1))).Do(
+                    If(self.seller_list[i.load()][on_addr] == order_id)
+                    .Then(
+                        r.store(i.load())
+                    )
+            ),
+            Return(r.load())
+        )
+
 
     @external
     def sellerWithdraw(self,amt: abi.Uint64,*,output: abi.Uint64):
@@ -256,19 +343,20 @@ class Ecommerce(Application):
                   oracle_pay:abi.PaymentTransaction,
                   product_pay:abi.AssetTransferTransaction,
                   token_:abi.Asset,
-                  *,output: abi.Uint64):
+                  *,output: abi.Uint16):
 
         """
         The buyer send tokens for paying the products and some algos for the oracle service.
         The oracle will check the transacion and validate the payment, if there is something
         wrong with it, the oracle will send back the tokens to the buyer.
+        Otherwise, it will create the order to the seller.
         """
         return Seq(
             # Verify inputs
             Assert(
                 # validate de payment to the oracle
                 oracle_pay.get().amount() >= self.oracle_fees,
-                oracle_pay.get().receiver() == self.address, # Must be the oracle address
+                oracle_pay.get().receiver() == Global.current_application_address(),
                 # check for the token
                 token_.asset_id() == self.token,
                 product_pay.get().asset_receiver() == self.address,
@@ -280,18 +368,34 @@ class Ecommerce(Application):
         )
 
     @external
+    # TODO: Check if the address is a seller
     def acceptOrder(self,
                     oracle_pay:abi.PaymentTransaction,
                     buyer_addr: abi.Account,
                     *, output: abi.Uint64):
-        """The seller accept the order request from the buyer.
-        The oracle will validate the transacction and move the funds from buyer to the seller."""
+        """The seller accept the order request from the buyer. and increase the deposit on the seller account."""
         return Seq(
             Assert(
+                self.isSeller() == Int(1),
                 oracle_pay.get().amount() >= self.oracle_fees,
-                oracle_pay.get().receiver() == self.address,
-                App.localGet(buyer_addr.address(),Bytes("deposit")) > Int(0)
-
+                oracle_pay.get().receiver() == self.oracle_address,
+                self.deposit[buyer_addr.address()] > Int(0)
             ),
+            output.set(Int(1))
+        )
+    @external
+    def oOrderFail(self,
+                   buyer_addr: abi.Account,
+                   amount: abi.Uint64,
+                   *, output: abi.Uint64):
+        """If the order failed, the oracle refund the tokens to the buyer, and delere the order
+        from the database."""
+        return Seq(
+            Assert(
+                Txn.sender() == self.oracle_address, # Only the oracle can execute this action.
+                self.deposit[buyer_addr.address()] >= amount.get(), # The buyer must have funds
+            ),
+            self.withdrawUSDC(buyer_addr.address(),amount.get()),
+            self.deposit.decrement(amount.get()),
             output.set(Int(1))
         )
