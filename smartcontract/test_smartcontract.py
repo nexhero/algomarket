@@ -175,3 +175,16 @@ class TestEcommerce:
         local_state = app_client.get_account_state()
         assert r.return_value == 1, "Application must return 1"
         assert local_state["deposit"] == 2000, "The deposit must be equal to 2000"
+
+    def test_oracle_order_success(self,
+                        buyer_acc:tuple[str,str,AccountTransactionSigner]):
+        baddr,bsk,bs = buyer_acc
+        sp = self.algod_client.suggested_params()
+
+
+        r = self.app_client.call(Ecommerce.oOrderSuccess,acc=baddr,v="test")
+        print(r.return_value)
+
+
+
+        assert r.return_value == "test", "Application must return 1"

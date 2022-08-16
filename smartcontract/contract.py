@@ -32,7 +32,7 @@ class Ecommerce(Application):
     """Default cost to become a premium seller."""
     _seller_cost = 4000
     """Default cost to be a seller"""
-    __ORDER_LIST_MAX = 10
+    __ORDER_LIST_MAX = 8
     app_name: Final[ApplicationStateValue] = ApplicationStateValue(
         stack_type=TealType.bytes,
         key=Bytes("app_name"),
@@ -224,17 +224,20 @@ class Ecommerce(Application):
 
         )
     @internal(TealType.uint64)
-    def getOrderByIndex(self, on_addr, index):
+    def getOrderByIndex(self, on_addr, index: abi.Uint8):
         """Get the value in the order_list using the index"""
         # TODO: Validate if the index is out the range
         return self.order_list[index][on_addr]
+
     @internal(TealType.none)
-    def setOrderOnIndex(self,on_addr,index, value):
-        self.order_list[index][on_addr].set(value)
+    def setOrderOnIndex(self,on_addr,index:abi.Uint8, value):
+        return Seq(self.order_list[index][on_addr].set(value))
         
     @internal(TealType.none)
     def reBlockOrderList(self,on_addr):
         """Move the empty index to the end of the array"""
+        # TODO: change the variable i to abi.uint8
+        # TODO: temp and next must be abi.String type
         temp = ScratchVar(TealType.bytes)
         next = ScratchVar(TealType.bytes)
         i = ScratchVar(TealType.uint64)
@@ -255,15 +258,17 @@ class Ecommerce(Application):
     @internal(TealType.none)
     def pushOrder(self,on_addr,order_id):
         """Add new order to the array and update the index"""
+        i = abi.make(abi.Uint8)
         # TODO: Only the administrator or the oracle can do this operation
         return Seq(
             Assert(
                 Txn.sender() == self.oracle_address, # Only the oracle can do this
                 self.order_index[on_addr] < Int(self.__ORDER_LIST_MAX),
             ),
+            i.set(self.order_index[on_addr]),
             # self.order_list[self.order_index][on_addr].set(order_id),
-            self.setOrderOnIndex(on_addr,self.order_index[on_addr],order_id),
-            self.order_index[on_addr].increment(Int(0)),
+            self.setOrderOnIndex(on_addr,i,order_id),
+            self.order_index[on_addr].increment(Int(1)),
         )
     @internal(TealType.bytes)
     def popOrder(self,on_addr,index):
@@ -383,19 +388,31 @@ class Ecommerce(Application):
             ),
             output.set(Int(1))
         )
+
     @external
-    def oOrderFail(self,
-                   buyer_addr: abi.Account,
-                   amount: abi.Uint64,
-                   *, output: abi.Uint64):
-        """If the order failed, the oracle refund the tokens to the buyer, and delere the order
-        from the database."""
+    def oOrderSuccess(self,acc:abi.Account,v: abi.String,*,output:abi.String):
+        i = abi.make(abi.Uint8)
+
         return Seq(
-            Assert(
-                Txn.sender() == self.oracle_address, # Only the oracle can execute this action.
-                self.deposit[buyer_addr.address()] >= amount.get(), # The buyer must have funds
-            ),
-            self.withdrawUSDC(buyer_addr.address(),amount.get()),
-            self.deposit.decrement(amount.get()),
-            output.set(Int(1))
+            i.set(self.order_index[acc.address()]),
+            self.pushOrder(acc.address(),v.get()),
+            output.set(self.order_list[i][acc.address()]),
+
         )
+
+    # @external
+    # def oOrderFail(self,
+    #                buyer_addr: abi.Account,
+    #                amount: abi.Uint64,
+    #                *, output: abi.Uint64):
+    #     """If the order failed, the oracle refund the tokens to the buyer, and delere the order
+    #     from the database."""
+    #     return Seq(
+    #         Assert(
+    #             Txn.sender() == self.oracle_address, # Only the oracle can execute this action.
+    #             self.deposit[buyer_addr.address()] >= amount.get(), # The buyer must have funds
+    #         ),
+    #         self.withdrawUSDC(buyer_addr.address(),amount.get()),
+    #         self.deposit.decrement(amount.get()),
+    #         output.set(Int(1))
+    #     )
