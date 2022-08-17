@@ -12,17 +12,14 @@ from beaker import (
     external,
     internal,
     client,
-    consts
+    consts,
+    struct
 )
 
 
 class Ecommerce(Application):
     """This smartcontract worsk as escrow between buyer and sellers, is the main point entrace to make request
     to the oracle."""
-
-    #################################################
-    # DEFINE ALL GLOBAL STATE FOR THE SMARTCONTRACT #
-    #################################################
 
     _oracle_fees = 1000
     """Default oracle fees cost"""
@@ -33,10 +30,37 @@ class Ecommerce(Application):
     _seller_cost = 4000
     """Default cost to be a seller"""
     __ORDER_LIST_MAX = 8
+
+
+    ###########################################
+    # DEFINE STRUCTURES FOR THE SMARTCONTRACT #
+    ###########################################
+    class Tokens(struct.Struct):
+        """
+        This struct is used to manage the tokens deposited for the buyer
+        and the incomes for the seller.
+        """
+        token_id: abi.Asset
+        amount: abi.Uint64
+
+    class Order(struct.Struct):
+        """
+        Define the order structure, this store the current bussines for the buyer.
+        """
+        seller: abi.Address     # The address should by encrypted to protect buyer privacy.
+        order_id: abi.String    # The order id should by encrypted to proect buyer privacy.
+        amount: abi.Uint64
+        token: abi.Uint64
+
+
+    #################################################
+    # DEFINE ALL GLOBAL STATE FOR THE SMARTCONTRACT #
+    #################################################
+
     app_name: Final[ApplicationStateValue] = ApplicationStateValue(
         stack_type=TealType.bytes,
         key=Bytes("app_name"),
-        default = Bytes("algomarket"),
+        default = Bytes("aMart-SmartContract"),
         descr="Define the application name for the oracle."
     )
     """Define the application name for the Oracle to reconize the request."""
@@ -49,7 +73,6 @@ class Ecommerce(Application):
     """Define who can administrate the smartcontract"""
 
     token: Final[ApplicationStateValue] = ApplicationStateValue(
-
         stack_type=TealType.uint64,
         key=Bytes("t"),
         default = Int(0),
@@ -116,12 +139,13 @@ class Ecommerce(Application):
         descr="Usdc currently deposit for the buyer user."
     )
     """Current usdc buyer deposited."""
-    order_list: Final[DynamicAccountStateValue] = DynamicAccountStateValue(
+    orders: Final[DynamicAccountStateValue] = DynamicAccountStateValue(
         stack_type=TealType.bytes,
         max_keys=__ORDER_LIST_MAX,
         descr="Current order posted by the buyer."
     )
     """List of orders posted by the buyer."""
+
     order_index: Final[AccountStateValue] = AccountStateValue(
         stack_type = TealType.uint64,
         default = Int(0),
@@ -225,13 +249,13 @@ class Ecommerce(Application):
         )
     @internal(TealType.uint64)
     def getOrderByIndex(self, on_addr, index: abi.Uint8):
-        """Get the value in the order_list using the index"""
+        """Get the value in the orders using the index"""
         # TODO: Validate if the index is out the range
-        return self.order_list[index][on_addr]
+        return self.orders[index][on_addr]
 
     @internal(TealType.none)
     def setOrderOnIndex(self,on_addr,index:abi.Uint8, value):
-        return Seq(self.order_list[index][on_addr].set(value))
+        return Seq(self.orders[index][on_addr].set(value))
         
     @internal(TealType.none)
     def reBlockOrderList(self,on_addr):
@@ -256,7 +280,7 @@ class Ecommerce(Application):
         )
 
     @internal(TealType.none)
-    def pushOrder(self,on_addr,order_id):
+    def pushOrder(self,on_addr,order):
         """Add new order to the array and update the index"""
         i = abi.make(abi.Uint8)
         # TODO: Only the administrator or the oracle can do this operation
@@ -266,8 +290,8 @@ class Ecommerce(Application):
                 self.order_index[on_addr] < Int(self.__ORDER_LIST_MAX),
             ),
             i.set(self.order_index[on_addr]),
-            # self.order_list[self.order_index][on_addr].set(order_id),
-            self.setOrderOnIndex(on_addr,i,order_id),
+            # self.orders[self.order_index][on_addr].set(order_id),
+            self.setOrderOnIndex(on_addr,i,order),
             self.order_index[on_addr].increment(Int(1)),
         )
     @internal(TealType.bytes)
@@ -344,11 +368,11 @@ class Ecommerce(Application):
         )
 
     @external
-    def makeOrder(self,
-                  oracle_pay:abi.PaymentTransaction,
-                  product_pay:abi.AssetTransferTransaction,
-                  token_:abi.Asset,
-                  *,output: abi.Uint16):
+    def placeOrder(self,
+                   oracle_pay:abi.PaymentTransaction,
+                   product_pay:abi.AssetTransferTransaction,
+                   token_:abi.Asset,
+                   *,output: abi.Uint16):
 
         """
         The buyer send tokens for paying the products and some algos for the oracle service.
@@ -373,12 +397,14 @@ class Ecommerce(Application):
         )
 
     @external
-    # TODO: Check if the address is a seller
     def acceptOrder(self,
                     oracle_pay:abi.PaymentTransaction,
                     buyer_addr: abi.Account,
                     *, output: abi.Uint64):
-        """The seller accept the order request from the buyer. and increase the deposit on the seller account."""
+        """
+        The seller accept the order request from the buyer,
+        and increase the deposit on the seller account.
+        """
         return Seq(
             Assert(
                 self.isSeller() == Int(1),
@@ -390,13 +416,20 @@ class Ecommerce(Application):
         )
 
     @external
-    def oOrderSuccess(self,acc:abi.Account,v: abi.String,*,output:abi.String):
+    def oOrderSuccess(self,acc:abi.Account,order: Order,*,output:abi.String):
+        """
+        The oracle has processed the order, and it validated, call this function
+        to lock the tokens for the bussines.
+        """
         i = abi.make(abi.Uint8)
 
         return Seq(
             i.set(self.order_index[acc.address()]),
-            self.pushOrder(acc.address(),v.get()),
-            output.set(self.order_list[i][acc.address()]),
+            self.pushOrder(acc.address(),order.encode()),
+            i.set(0),
+            (_order := self.Order()).decode(self.orders[i][acc.address()]),
+            output.set(_order.order_id),
+            # output.set(self.order_index[acc.address()])
 
         )
 
