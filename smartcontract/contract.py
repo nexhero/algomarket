@@ -420,16 +420,16 @@ class Ecommerce(Application):
         """
         The oracle has processed the order, and it validated, call this function
         to lock the tokens for the bussines.
+        Returns The order id.
         """
         i = abi.make(abi.Uint8)
 
         return Seq(
             i.set(self.order_index[acc.address()]),
             self.pushOrder(acc.address(),order.encode()),
-            i.set(0),
             (_order := self.Order()).decode(self.orders[i][acc.address()]),
             output.set(_order.order_id),
-            # output.set(self.order_index[acc.address()])
+
 
         )
 
