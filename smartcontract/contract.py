@@ -13,7 +13,7 @@ from beaker import (
     internal,
     client,
     consts,
-    struct
+    struct,
 )
 
 
@@ -31,6 +31,11 @@ class Ecommerce(Application):
     """Default cost to be a seller"""
     __ORDER_LIST_MAX = 8
 
+    # Define status for the orders
+    ORDER_PENDING = 0
+    ORDER_ACCEPTED = 1
+    ORDER_CANCELLED = 2
+    ORDER_COMPLETED = 3
 
     ###########################################
     # DEFINE STRUCTURES FOR THE SMARTCONTRACT #
@@ -51,6 +56,7 @@ class Ecommerce(Application):
         order_id: abi.String    # The order id should by encrypted to proect buyer privacy.
         amount: abi.Uint64
         token: abi.Uint64
+        status: abi.Uint8
 
 
     #################################################
@@ -247,7 +253,7 @@ class Ecommerce(Application):
             InnerTxnBuilder.Submit(),
 
         )
-    @internal(TealType.uint64)
+    @internal(TealType.bytes)
     def getOrderByIndex(self, on_addr, index: abi.Uint8):
         """Get the value in the orders using the index"""
         # TODO: Validate if the index is out the range
@@ -307,25 +313,29 @@ class Ecommerce(Application):
         )
 
     @internal(TealType.uint64)
-    def searchOrderIndex(self,on_addr,order_id):
+    def searchOrderIndex(self,on_addr,order_id: abi.String):
         """
         Check if the account has the order on his list, and return the index,
         Return 0 if doesn't has the order, otherwise return the index + 1,
         because pyteal do not support negative numbers.
         """
+        idx = abi.make(abi.Uint8)
         i = ScratchVar(TealType.uint64)
         r = ScratchVar(TealType.uint64) # the return value
         return Seq(
             r.store(Int(0)),
-            For(i.store(Int(0)), i.load() < self.__ORDER_LIST_MAX, i.store(i.load() + Int(1))).Do(
-                    If(self.seller_list[i.load()][on_addr] == order_id)
+            For(i.store(Int(0)), i.load() < self.order_index[on_addr], i.store(i.load() + Int(1))).Do(
+                    idx.set(i.load()),
+                    (_order := self.Order()).decode(self.orders[idx][on_addr]),
+                    (_order_id := abi.String()).set(_order.order_id),
+                    If(_order_id.get() == order_id.get())
                     .Then(
-                        r.store(i.load())
+                        r.store(i.load()+Int(1))
                     )
             ),
+            # TODO: must return the index + 1, because 0 if the value is not found
             Return(r.load())
         )
-
 
     @external
     def sellerWithdraw(self,amt: abi.Uint64,*,output: abi.Uint64):
@@ -398,25 +408,54 @@ class Ecommerce(Application):
 
     @external
     def acceptOrder(self,
-                    oracle_pay:abi.PaymentTransaction,
-                    buyer_addr: abi.Account,
-                    *, output: abi.Uint64):
+                    b: abi.Account,        # The buyer address
+                    order_id: abi.String,  # The purchase order id
+                    *, output: abi.String):
         """
         The seller accept the order request from the buyer,
         and increase the deposit on the seller account.
         """
+        r = abi.make(abi.Uint8)            # Return value for teh search
+        i = abi.make(abi.Uint8)            # Real index
         return Seq(
             Assert(
                 self.isSeller() == Int(1),
-                oracle_pay.get().amount() >= self.oracle_fees,
-                oracle_pay.get().receiver() == self.oracle_address,
-                self.deposit[buyer_addr.address()] > Int(0)
             ),
-            output.set(Int(1))
+            r.set(self.searchOrderIndex(b.address(),order_id)),
+            If(r.get() != Int(0))
+            .Then(
+                # Found the order, now it process to check the seller address
+                i.set(r.get()-Int(1)),
+                (_order := self.Order()).decode(self.orders[i][b.address()]),
+                (seller := abi.Address()).set(_order.seller),
+                If(seller.get() != Txn.sender())
+                .Then(
+                    # output.set("sender_is_not_the_seller")     # The sender is not the seller for this order.
+                    output.set("sender_is_not_the_seller_order")
+                )
+                .Else(
+                    (order_id := abi.String()).set(_order.order_id),
+                    (amount := abi.Uint64()).set(_order.amount),
+                    (token := abi.Uint64()).set(_order.token),
+                    (status := abi.Uint8()).set(_order.status),
+
+                    Assert( status.get() == Int(0)),
+                    status.set(self.ORDER_ACCEPTED),
+                    _order.set(seller,order_id,amount,token,status),
+                    self.orders[i][b.address()].set(_order.encode()),
+
+                    (_order := self.Order()).decode(self.orders[i][b.address()]),
+                    output.set("status_order_updated")
+                )
+            )
+            .Else(
+                # The order was not found, return 0
+                output.set("order_not_found"),
+            ),
         )
 
     @external
-    def oOrderSuccess(self,acc:abi.Account,order: Order,*,output:abi.String):
+    def oPlaceOrderSuccess(self,acc:abi.Account,order: Order,*,output:abi.String):
         """
         The oracle has processed the order, and it validated, call this function
         to lock the tokens for the bussines.
@@ -429,13 +468,11 @@ class Ecommerce(Application):
             self.pushOrder(acc.address(),order.encode()),
             (_order := self.Order()).decode(self.orders[i][acc.address()]),
             output.set(_order.order_id),
-
-
         )
 
     # @external
     # def oOrderFail(self,
-    #                buyer_addr: abi.Account,
+    #                b: abi.Account,
     #                amount: abi.Uint64,
     #                *, output: abi.Uint64):
     #     """If the order failed, the oracle refund the tokens to the buyer, and delere the order
@@ -443,9 +480,9 @@ class Ecommerce(Application):
     #     return Seq(
     #         Assert(
     #             Txn.sender() == self.oracle_address, # Only the oracle can execute this action.
-    #             self.deposit[buyer_addr.address()] >= amount.get(), # The buyer must have funds
+    #             self.deposit[b.address()] >= amount.get(), # The buyer must have funds
     #         ),
-    #         self.withdrawUSDC(buyer_addr.address(),amount.get()),
+    #         self.withdrawUSDC(b.address(),amount.get()),
     #         self.deposit.decrement(amount.get()),
     #         output.set(Int(1))
     #     )

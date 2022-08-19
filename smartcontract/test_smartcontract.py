@@ -160,7 +160,7 @@ class TestEcommerce:
         asset_id = app_state[Ecommerce.token.str_key()]
         # asset_id = app_state[Ecommerce.token.str_key()]
         r = app_client.call(
-            Ecommerce.makeOrder,
+            Ecommerce.placeOrder,
             oracle_pay = TransactionWithSigner(
                 txn=transaction.PaymentTxn(baddr,sp,self.app_client.app_addr,1000,note="paying for the oracle"),
                 signer=bs
@@ -169,7 +169,6 @@ class TestEcommerce:
                 txn=transaction.AssetTransferTxn(baddr,sp,self.app_client.app_addr,2000,asset_id),
                 signer=bs
             ),
-            order_id= "random_ss",
             token_ = asset_id
         )
         local_state = app_client.get_account_state()
@@ -177,14 +176,46 @@ class TestEcommerce:
         assert local_state["deposit"] == 2000, "The deposit must be equal to 2000"
 
     def test_oracle_order_success(self,
-                        buyer_acc:tuple[str,str,AccountTransactionSigner]):
+                                  seller_acc:tuple[str,str,AccountTransactionSigner],
+                                  buyer_acc:tuple[str,str,AccountTransactionSigner]):
+        saddr,_,_ = seller_acc
         baddr,bsk,bs = buyer_acc
+        order = {"seller": baddr, "order_id": "xx1","amount":1,"token":2002, "status":0 }
+        sp = self.algod_client.suggested_params()
+
+        r = self.app_client.call(Ecommerce.oPlaceOrderSuccess,acc=baddr,order=order)
+        print("the new index is:"+str(r.return_value))
+        assert r.return_value == order["order_id"], "Application must return 1"
+
+    def test_oracle_order_success_2(self,
+                                    seller_acc:tuple[str,str,AccountTransactionSigner],
+                                    buyer_acc:tuple[str,str,AccountTransactionSigner]):
+        saddr,_,_ = seller_acc
+        baddr,bsk,bs = buyer_acc
+        order = {"seller": saddr, "order_id": "xx2","amount":1,"token":2002,"status": 0}
         sp = self.algod_client.suggested_params()
 
 
-        r = self.app_client.call(Ecommerce.oOrderSuccess,acc=baddr,v="test")
+        r = self.app_client.call(
+            Ecommerce.oPlaceOrderSuccess,
+            acc=baddr,
+            order=order
+        )
+        print("the new index is:"+str(r.return_value))
+        assert r.return_value == order["order_id"], "Application must return 1"
+
+    def test_accept_order(self,
+                          seller_acc:tuple[str,str,AccountTransactionSigner],
+                          buyer_acc:tuple[str,str,AccountTransactionSigner]):
+        baddr,bsk,bs = buyer_acc
+        saddr,_,ss = seller_acc
+        app_client = client.ApplicationClient(self.algod_client,self.app,self.app_client.app_id,signer=ss)
+        sp = self.algod_client.suggested_params()
+        app_state = app_client.get_application_state()
+
+        r = app_client.call(
+            Ecommerce.acceptOrder,
+            b=baddr,
+            order_id="xx1",
+        )
         print(r.return_value)
-
-
-
-        assert r.return_value == "test", "Application must return 1"
