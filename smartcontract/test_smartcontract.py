@@ -21,6 +21,8 @@ class TestEcommerce:
     app_addr = ""
     _USDC_SUPPLY = 446744073709
     _USDC_DECIMALS = 6
+
+    tokens = []
     @pytest.fixture
     def admin_acc(self) -> tuple[str,str,AccountTransactionSigner]:
         addr, sk = self.accounts[0].address, self.accounts[0].private_key
@@ -82,12 +84,13 @@ class TestEcommerce:
         self.app,self.app_addr,_ = self.app_client.create()
         app_state = self.app_client.get_application_state()
         sender = self.app_client.get_sender()
-        assert app_state["e"] == 0, "Earning should be 0"
+
         assert app_state[Ecommerce.admin.str_key()] == decode_address(sender).hex(), "The admin should be the first address"
         assert self.app_client.app_id > 0, "No app id created"
 
     def test_setup(self,create_usdc: int):
         usdc = create_usdc
+        self.tokens.append(usdc)
         sp = self.algod_client.suggested_params()
         ptxn = TransactionWithSigner(
             txn = transaction.PaymentTxn(
@@ -95,31 +98,40 @@ class TestEcommerce:
             ),
             signer = self.app_client.get_signer(),
         )
-        r = self.app_client.call(self.app.setup,t = ptxn, asset = usdc)
+        r = self.app_client.call(self.app.setup,t = ptxn)
         app_state = self.app_client.get_application_state()
         # assert app_state["t"] == usdc, "Token for trading must be usdc"
-        assert app_state[Ecommerce.token.str_key()] == usdc, "Must be usdc token"
-        assert r.return_value == 1, "Application must return 1"
+
+        assert r.return_value == "setup_successfull", "Application must str message"
+    def test_opt_token(self):
+        sp = self.algod_client.suggested_params()
+        ptxn = TransactionWithSigner(
+            txn = transaction.PaymentTxn(
+                self.app_client.get_sender(), sp, self.app_client.app_addr,int(1e7)
+            ),
+            signer = self.app_client.get_signer(),
+        )
+        r = self.app_client.call(self.app.addToken,a = self.tokens[0])
+        print("### contract opt-in asset")
+        print(r.return_value)
 
     def test_seller_opt_in(self,seller_acc:tuple[str,str,AccountTransactionSigner]):
         addr,sk,signer =  seller_acc
         app_client = client.ApplicationClient(self.algod_client,self.app,self.app_client.app_id,signer=signer)
         r = app_client.opt_in()
         client_state = app_client.get_account_state()
-        assert client_state[Ecommerce.income.str_key()] == 0, "The initial income must be zero"
-        assert client_state[Ecommerce.deposit.str_key()] == 0, "The initial deposit must be zero"
-        assert client_state[Ecommerce.is_seller.str_key()] == 0, "The the account can't be a seller by default"
-        assert client_state[Ecommerce.is_premium.str_key()] == 0, "The seller can't be a premim by default"
+
+
+        # assert client_state[Ecommerce.deposit.str_key()] == 0, "The initial deposit must be zero"
+        # assert client_state[Ecommerce.is_seller.str_key()] == 0, "The the account can't be a seller by default"
+
 
     def test_buyer_opt_in(self,buyer_acc:tuple[str,str,AccountTransactionSigner]):
         addr,sk,signer =  buyer_acc
         app_client = client.ApplicationClient(self.algod_client,self.app,self.app_client.app_id,signer=signer)
         r = app_client.opt_in()
         client_state = app_client.get_account_state()
-        assert client_state[Ecommerce.income.str_key()] == 0, "The initial income must be zero"
-        assert client_state["deposit"] == 0, "The initial deposit must be zero"
-        assert client_state["is"] == 0, "The the account can't be a seller by default"
-        assert client_state["ip"] == 0, "The seller can't be a premim by default"
+
     def test_become_seller(self,seller_acc: tuple[str,str,AccountTransactionSigner]):
         addr,sk,signer =  seller_acc
         app_client = client.ApplicationClient(self.algod_client,self.app,self.app_client.app_id,signer=signer)
@@ -132,24 +144,27 @@ class TestEcommerce:
         )
         r = app_client.call(self.app.setSeller,p = ptxn)
         app_state = app_client.get_account_state()
-        assert app_state["is"] == 1, "After paying the cost, the value of is_seller must be 1"
-        assert r.return_value == 1, "Application must return 1"
-    def test_become_premium(self,seller_acc: tuple[str,str,AccountTransactionSigner]):
-        addr,sk,signer =  seller_acc
-        app_client = client.ApplicationClient(self.algod_client,self.app,self.app_client.app_id,signer=signer)
-        sp = self.algod_client.suggested_params()
-        ptxn = TransactionWithSigner(
-            txn = transaction.PaymentTxn(
-                addr, sp, self.app_client.app_addr,int(3e3)
-            ),
-            signer = signer
-        )
-        r = app_client.call(self.app.setPremium,p = ptxn)
-        app_state = app_client.get_account_state()
-        assert app_state["ip"] == 1, "After paying the cost, the value of is_premium must be 1"
+        assert app_state["is_seller"] == 1, "After paying the cost, the value of is_seller must be 1"
         assert r.return_value == 1, "Application must return 1"
 
+
+    # def test_get_deposit(self,
+    #                      buyer_acc:tuple[str,str,AccountTransactionSigner]):
+    #     baddr,bsk,bs = buyer_acc
+    #     app_client = client.ApplicationClient(self.algod_client,self.app,self.app_client.app_id,signer=bs)
+    #     sp = self.algod_client.suggested_params()
+    #     app_state = app_client.get_application_state()
+    #     asset_id = self.tokens[0]
+
+    #     # asset_id = app_state[Ecommerce.token.str_key()]
+    #     r = app_client.call(
+    #         Ecommerce.getDeposit,
+    #         addr = baddr,
+    #         i = 0)
+    #     print(r.return_value)
+
     def test_make_order(self,
+
                         seller_acc:tuple[str,str,AccountTransactionSigner],
                         buyer_acc:tuple[str,str,AccountTransactionSigner]):
         baddr,bsk,bs = buyer_acc
@@ -157,7 +172,8 @@ class TestEcommerce:
         app_client = client.ApplicationClient(self.algod_client,self.app,self.app_client.app_id,signer=bs)
         sp = self.algod_client.suggested_params()
         app_state = app_client.get_application_state()
-        asset_id = app_state[Ecommerce.token.str_key()]
+        asset_id = self.tokens[0]
+
         # asset_id = app_state[Ecommerce.token.str_key()]
         r = app_client.call(
             Ecommerce.placeOrder,
@@ -173,7 +189,7 @@ class TestEcommerce:
         )
         local_state = app_client.get_account_state()
         assert r.return_value == 1, "Application must return 1"
-        assert local_state["deposit"] == 2000, "The deposit must be equal to 2000"
+
 
     def test_oracle_order_success(self,
                                   seller_acc:tuple[str,str,AccountTransactionSigner],
@@ -183,9 +199,29 @@ class TestEcommerce:
         order = {"seller": baddr, "order_id": "xx1","amount":1,"token":2002, "status":0 }
         sp = self.algod_client.suggested_params()
 
-        r = self.app_client.call(Ecommerce.oPlaceOrderSuccess,acc=baddr,order=order)
-        print("the new index is:"+str(r.return_value))
-        assert r.return_value == order["order_id"], "Application must return 1"
+        r = self.app_client.call(
+            Ecommerce.oPlaceOrderSuccess,
+            acc=baddr,
+            order=order,
+            i=1,
+            d={"token_id": self.tokens[0],"amount":10000},
+        )
+        print(r.return_value)
+        # assert r.return_value == order["order_id"], "Application must return 1"
+
+    def test_get_deposit_after(self,
+                         buyer_acc:tuple[str,str,AccountTransactionSigner]):
+        baddr,bsk,bs = buyer_acc
+        app_client = client.ApplicationClient(self.algod_client,self.app,self.app_client.app_id,signer=bs)
+        sp = self.algod_client.suggested_params()
+
+
+        # asset_id = app_state[Ecommerce.token.str_key()]
+        r = app_client.call(
+            Ecommerce.getDeposit,
+            addr = baddr,
+            i = 1)
+        print(r.return_value)
 
     def test_oracle_order_success_2(self,
                                     seller_acc:tuple[str,str,AccountTransactionSigner],
@@ -199,23 +235,25 @@ class TestEcommerce:
         r = self.app_client.call(
             Ecommerce.oPlaceOrderSuccess,
             acc=baddr,
-            order=order
-        )
-        print("the new index is:"+str(r.return_value))
-        assert r.return_value == order["order_id"], "Application must return 1"
-
-    def test_accept_order(self,
-                          seller_acc:tuple[str,str,AccountTransactionSigner],
-                          buyer_acc:tuple[str,str,AccountTransactionSigner]):
-        baddr,bsk,bs = buyer_acc
-        saddr,_,ss = seller_acc
-        app_client = client.ApplicationClient(self.algod_client,self.app,self.app_client.app_id,signer=ss)
-        sp = self.algod_client.suggested_params()
-        app_state = app_client.get_application_state()
-
-        r = app_client.call(
-            Ecommerce.acceptOrder,
-            b=baddr,
-            order_id="xx1",
+            order=order,
+            i=0,
+            d={"token_id": self.tokens[0],"amount":12340},
         )
         print(r.return_value)
+
+
+    # def test_accept_order(self,
+    #                       seller_acc:tuple[str,str,AccountTransactionSigner],
+    #                       buyer_acc:tuple[str,str,AccountTransactionSigner]):
+    #     baddr,bsk,bs = buyer_acc
+    #     saddr,_,ss = seller_acc
+    #     app_client = client.ApplicationClient(self.algod_client,self.app,self.app_client.app_id,signer=ss)
+    #     sp = self.algod_client.suggested_params()
+    #     app_state = app_client.get_application_state()
+
+    #     r = app_client.call(
+    #         Ecommerce.acceptOrder,
+    #         b=baddr,
+    #         order_id="xx2",
+    #     )
+    #     print(r.return_value)

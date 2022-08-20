@@ -8,6 +8,7 @@ from beaker import (
     AccountStateValue,
     DynamicAccountStateValue,
     ApplicationStateValue,
+    DynamicApplicationStateValue,
     Authorize,
     external,
     internal,
@@ -20,16 +21,16 @@ from beaker import (
 class Ecommerce(Application):
     """This smartcontract worsk as escrow between buyer and sellers, is the main point entrace to make request
     to the oracle."""
+    # TODO: all the external function return a message
 
     _oracle_fees = 1000
     """Default oracle fees cost"""
     _comission_fees = 1000
     """Default comission for sellers"""
-    _premium_cost = 3000
-    """Default cost to become a premium seller."""
     _seller_cost = 4000
     """Default cost to be a seller"""
-    __ORDER_LIST_MAX = 8
+    __ORDER_LIST_MAX = 6
+    __TOKEN_LIST_MAX = 4
 
     # Define status for the orders
     ORDER_PENDING = 0
@@ -42,10 +43,11 @@ class Ecommerce(Application):
     ###########################################
     class Tokens(struct.Struct):
         """
+        TODO: It need to be implemented.
         This struct is used to manage the tokens deposited for the buyer
         and the incomes for the seller.
         """
-        token_id: abi.Asset
+        token_id: abi.Uint64           # 0 for algos
         amount: abi.Uint64
 
     class Order(struct.Struct):
@@ -78,13 +80,6 @@ class Ecommerce(Application):
     )
     """Define who can administrate the smartcontract"""
 
-    token: Final[ApplicationStateValue] = ApplicationStateValue(
-        stack_type=TealType.uint64,
-        key=Bytes("t"),
-        default = Int(0),
-        descr="Store the token it will use for transactions, for now just usdc."
-    )
-    """Token used for trading."""
     oracle_address: Final[ApplicationStateValue] = ApplicationStateValue(
         stack_type=TealType.bytes,
         key=Bytes("o"),
@@ -93,10 +88,10 @@ class Ecommerce(Application):
     )
     """Define the oracle address."""
 
-    earning: Final[ApplicationStateValue] = ApplicationStateValue(
-        stack_type=TealType.uint64,
-        key=Bytes("e"),
-        default=Int(0),
+    earning: Final[DynamicApplicationStateValue] = DynamicApplicationStateValue(
+        # TODO: Implement token structure.
+        stack_type=TealType.bytes,
+        max_keys = __TOKEN_LIST_MAX,
         descr="Acomulate the fees that smartcontract made for selling products"
     )
     """Manage the earning that smartcontract made when a seller sell a product."""
@@ -118,6 +113,7 @@ class Ecommerce(Application):
     """The cost for making request to the oracle"""
 
     seller_insurance: Final[ApplicationStateValue] = ApplicationStateValue(
+        # TODO: change variable name
         stack_type=TealType.uint64,
         key=Bytes("si"),
         default = Int(_seller_cost),
@@ -125,24 +121,18 @@ class Ecommerce(Application):
     )
     """Cost for becoming a seller, this algos will use as insurance."""
 
-    premium_cost: Final[ApplicationStateValue] = ApplicationStateValue(
-        stack_type=TealType.uint64,
-        key = Bytes("pc"),
-        default = Int(_premium_cost),
-        descr="The price that seller must pay to become a premium sellerr, this will reduce the comission fees."
-    )
-    """Define the cost for a seller to become a premium, by doing this, seller receive a discont on sell comission."""
-
-
     ################################################
     # DEFINE ALL LOCAL STATE FOR THE SMARTCONTRACT #
     ################################################
 
-    deposit: Final[AccountStateValue] = AccountStateValue(
-        stack_type=TealType.uint64,
-
-        default = Int(0),
-        descr="Usdc currently deposit for the buyer user."
+    ###################
+    # BUYER VARIABLES #
+    ###################
+    deposit: Final[DynamicAccountStateValue] = DynamicAccountStateValue(
+        # TODO: Implement token structure
+        stack_type=TealType.bytes,
+        max_keys=__TOKEN_LIST_MAX,
+        descr="Count deposited tokens"
     )
     """Current usdc buyer deposited."""
     orders: Final[DynamicAccountStateValue] = DynamicAccountStateValue(
@@ -157,28 +147,25 @@ class Ecommerce(Application):
         default = Int(0),
         descr = "Manage the current index for the order list array"
     )
+    """Manage the current key position for the orders"""
 
-    income: Final[AccountStateValue] =AccountStateValue(
-        stack_type=TealType.uint64,
-        key=Bytes("i"),
-        default=Int(0),
-        descr="USDC currently for the seller user."
+    ####################
+    # SELLER VARIABLES #
+    ####################
+    income: Final[DynamicAccountStateValue] =DynamicAccountStateValue(
+        # TODO: implement token structure
+        stack_type=TealType.bytes,
+        max_keys = __TOKEN_LIST_MAX,
+        descr="Count the income tokens for the seller."
     )
-    """Available usdc for the seller."""
+    """Count the income tokens for the seller."""
+
     is_seller: Final[AccountStateValue] = AccountStateValue(
         stack_type=TealType.uint64,
-        key=Bytes("is"),
         default=Int(0),
         descr="Flag, is the address a seller user."
     )
-    """Flag manage is the account is a seller."""
-    is_premium: Final[AccountStateValue] = AccountStateValue(
-        stack_type=TealType.uint64,
-        key=Bytes("ip"),
-        default=Int(0),
-        descr="Address that paid for a premium."
-    )
-    """Flag manage is the seller paid for a premium service."""
+
 
     @create
     def create(self):
@@ -199,27 +186,34 @@ class Ecommerce(Application):
         return If( Txn.sender() == self.admin, Return(Int(1)),Return(Int(0)))
 
     @external(authorize=Authorize.only(Global.creator_address()))
-    def setup(self,
-              t: abi.PaymentTransaction,
-              asset: abi.Asset,
-              *,output:abi.Uint64):
-        """The contract receive some algos and opt-in into the token to use for trading."""
+    def addToken(self,
+                 a: abi.Asset,
+                 *, output:abi.String):
+        """Enable new tokens for payment"""
         return Seq(
-            Assert(
-                t.get().receiver() == self.address
-            ),
             InnerTxnBuilder.Begin(),
             InnerTxnBuilder.SetFields(
                 {
                     TxnField.type_enum: TxnType.AssetTransfer,
-                    TxnField.xfer_asset: asset.asset_id(),
+                    TxnField.xfer_asset: a.asset_id(),
                     TxnField.asset_amount: Int(0),
                     TxnField.asset_receiver: self.address,
                 }
             ),
             InnerTxnBuilder.Submit(),
-            self.token.set(asset.asset_id()),
-            output.set(Int(1))
+            output.set("new_token_added")
+        )
+
+    @external(authorize=Authorize.only(Global.creator_address()))
+    def setup(self,
+              t: abi.PaymentTransaction,
+              *,output:abi.String):
+        """The contract receive some algos and opt-in into the token to use for trading."""
+        return Seq(
+            Assert(
+                t.get().receiver() == self.address
+            ),
+            output.set("setup_successfull")
         )
 
     @internal(TealType.uint64)
@@ -232,27 +226,7 @@ class Ecommerce(Application):
         """Check if the address called is a seller account."""
         return self.is_seller
 
-    @internal(TealType.uint64)
-    def isPremiumSeller(self):
-        """Check if the sender is a premium seller account"""
-        return self.is_premium
 
-    @internal(TealType.none)
-    def withdrawUSDC(self, addr, amt):
-        """Move USDC token to an address"""
-        return Seq(
-            InnerTxnBuilder.Begin(),
-            InnerTxnBuilder.SetFields(
-                {
-                    TxnField.type_enum: TxnType.AssetTransfer,
-                    TxnField.xfer_asset: Int(2), # TODO: Make a global variable to store usdc token id
-                    TxnField.asset_amount: amt,
-                    TxnField.asset_receiver: addr,
-                }
-            ),
-            InnerTxnBuilder.Submit(),
-
-        )
     @internal(TealType.bytes)
     def getOrderByIndex(self, on_addr, index: abi.Uint8):
         """Get the value in the orders using the index"""
@@ -262,7 +236,7 @@ class Ecommerce(Application):
     @internal(TealType.none)
     def setOrderOnIndex(self,on_addr,index:abi.Uint8, value):
         return Seq(self.orders[index][on_addr].set(value))
-        
+
     @internal(TealType.none)
     def reBlockOrderList(self,on_addr):
         """Move the empty index to the end of the array"""
@@ -284,6 +258,7 @@ class Ecommerce(Application):
                     ),
             )
         )
+
 
     @internal(TealType.none)
     def pushOrder(self,on_addr,order):
@@ -338,33 +313,6 @@ class Ecommerce(Application):
         )
 
     @external
-    def sellerWithdraw(self,amt: abi.Uint64,*,output: abi.Uint64):
-        """A seller make a withdraw of USDC tokens."""
-        return Seq(
-            Assert(
-                self.income >= amt.get()
-            ),
-            self.withdrawUSDC(Txn.sender(),amt.get()),
-            self.income.set(self.income - amt.get()),
-            output.set(Int(1))
-        )
-    @external
-    def setPremium(self,p: abi.PaymentTransaction,*,output: abi.Uint64):
-        """Set a seller as premium user"""
-        return Seq(
-            Assert(
-                self.isPremiumSeller() == Int(0),
-                self.is_seller == Int(1), # Needs to be a seller
-                Global.group_size() == Int(2),
-                p.get().receiver() == Global.current_application_address(),
-                p.get().amount() >= self.premium_cost
-
-            ),
-            self.is_premium.set(Int(1)),
-            output.set(Int(1)),
-        )
-
-    @external
     def setSeller(self,p: abi.PaymentTransaction,*,output: abi.Uint64):
         """Pay some algos and become a seller, the algos goes to the insured amount"""
         return Seq(
@@ -375,6 +323,19 @@ class Ecommerce(Application):
             ),
             self.is_seller.set(Int(1)),
             output.set(Int(1))
+        )
+
+    @external
+    def getDeposit(self,addr: abi.Account,i: abi.Uint8,*,output: Tokens):
+        """Get deposit for a specific token using the index"""
+        return Seq(
+            output.decode(self.deposit[i][addr.address()]),
+        )
+    @external
+    def getIncome(self,addr: abi.Account,i: abi.Uint8,*,output: Tokens):
+        """Get income for a specific token using the index"""
+        return Seq(
+            output.decode(self.income[i][addr.address()]),
         )
 
     @external
@@ -396,80 +357,96 @@ class Ecommerce(Application):
                 # validate de payment to the oracle
                 oracle_pay.get().amount() >= self.oracle_fees,
                 oracle_pay.get().receiver() == Global.current_application_address(),
-                # check for the token
-                token_.asset_id() == self.token,
+
                 product_pay.get().asset_receiver() == self.address,
-                product_pay.get().xfer_asset() == self.token,
+                # product_pay.get().xfer_asset() == self.token,
                 product_pay.get().asset_amount() >= Int(0),
             ),
-            self.deposit.increment(product_pay.get().asset_amount()),
+            # self.deposit.increment(product_pay.get().asset_amount()),
             output.set(Int(1))
         )
 
+    # @external
+    # def acceptOrder(self,
+    #                 b: abi.Account,        # The buyer address
+    #                 order_id: abi.String,  # The purchase order id
+    #                 *, output: abi.String):
+    #     """
+    #     The seller accept the order request from the buyer,
+    #     and increase the deposit on the seller account.
+    #     """
+    #     ###############################################################################
+    #     # Due to massive order that a seller can receive, is not optimal to store all #
+    #     # in the smartcontract, for the seller it will managed by the database-oracle #
+    #     ###############################################################################
+    #     r = abi.make(abi.Uint8)            # Return value for teh search
+    #     i = abi.make(abi.Uint8)            # Real index
+    #     return Seq(
+    #         Assert(
+    #             self.isSeller() == Int(1),
+    #         ),
+    #         r.set(self.searchOrderIndex(b.address(),order_id)),
+    #         If(r.get() != Int(0))
+    #         .Then(
+    #             # Found the order, now it process to check the seller address
+    #             i.set(r.get()-Int(1)),
+    #             (_order := self.Order()).decode(self.orders[i][b.address()]),
+    #             (seller := abi.Address()).set(_order.seller),
+    #             If(seller.get() != Txn.sender())
+    #             .Then(
+    #                 output.set("sender_is_not_the_seller_order")
+    #             )
+    #             .Else(
+    #                 # order snapshot
+    #                 (order_id := abi.String()).set(_order.order_id),
+    #                 (amount := abi.Uint64()).set(_order.amount),
+    #                 (token := abi.Uint64()).set(_order.token),
+    #                 (status := abi.Uint8()).set(_order.status),
+
+    #                 Assert( status.get() == Int(self.ORDER_PENDING)),
+    #                 status.set(self.ORDER_ACCEPTED),
+    #                 _order.set(seller,order_id,amount,token,status),
+    #                 self.orders[i][b.address()].set(_order.encode()), # update order in buyer local state.
+
+    #                 # (_order := self.Order()).decode(self.orders[i][b.address()]),
+    #                 output.set("status_order_updated")
+    #             )
+    #         )
+    #         .Else(
+    #             # The order was not found, return 0
+    #             output.set("order_not_found"),
+    #         ),
+    #     )
+    # @external
+    # def rejectOrder(self,
+    #                 b: abi.Account,
+    #                 order_id: abi.String,
+    #                 *, output: abi.String):
+    #     """
+    #     Seller reject the order, the smartcontract will send the tokens back.
+    #     """
+    #     pass
+
     @external
-    def acceptOrder(self,
-                    b: abi.Account,        # The buyer address
-                    order_id: abi.String,  # The purchase order id
-                    *, output: abi.String):
-        """
-        The seller accept the order request from the buyer,
-        and increase the deposit on the seller account.
-        """
-        r = abi.make(abi.Uint8)            # Return value for teh search
-        i = abi.make(abi.Uint8)            # Real index
-        return Seq(
-            Assert(
-                self.isSeller() == Int(1),
-            ),
-            r.set(self.searchOrderIndex(b.address(),order_id)),
-            If(r.get() != Int(0))
-            .Then(
-                # Found the order, now it process to check the seller address
-                i.set(r.get()-Int(1)),
-                (_order := self.Order()).decode(self.orders[i][b.address()]),
-                (seller := abi.Address()).set(_order.seller),
-                If(seller.get() != Txn.sender())
-                .Then(
-                    # output.set("sender_is_not_the_seller")     # The sender is not the seller for this order.
-                    output.set("sender_is_not_the_seller_order")
-                )
-                .Else(
-                    (order_id := abi.String()).set(_order.order_id),
-                    (amount := abi.Uint64()).set(_order.amount),
-                    (token := abi.Uint64()).set(_order.token),
-                    (status := abi.Uint8()).set(_order.status),
-
-                    Assert( status.get() == Int(0)),
-                    status.set(self.ORDER_ACCEPTED),
-                    _order.set(seller,order_id,amount,token,status),
-                    self.orders[i][b.address()].set(_order.encode()),
-
-                    (_order := self.Order()).decode(self.orders[i][b.address()]),
-                    output.set("status_order_updated")
-                )
-            )
-            .Else(
-                # The order was not found, return 0
-                output.set("order_not_found"),
-            ),
-        )
-
-    @external
-    def oPlaceOrderSuccess(self,acc:abi.Account,order: Order,*,output:abi.String):
+    def oPlaceOrderSuccess(self,acc:abi.Account,order: Order,i: abi.Uint8,d: Tokens,*,output:Tokens):
         """
         The oracle has processed the order, and it validated, call this function
         to lock the tokens for the bussines.
         Returns The order id.
         """
-        i = abi.make(abi.Uint8)
+        idx = abi.make(abi.Uint8)
 
         return Seq(
-            i.set(self.order_index[acc.address()]),
+            idx.set(self.order_index[acc.address()]),
             self.pushOrder(acc.address(),order.encode()),
-            (_order := self.Order()).decode(self.orders[i][acc.address()]),
-            output.set(_order.order_id),
+            (_order := self.Order()).decode(self.orders[idx][acc.address()]),
+            self.deposit[i][acc.address()].set(d.encode()),
+            output.decode(self.deposit[i][acc.address()]),
+            # output.decode(d),
         )
 
+
+    
     # @external
     # def oOrderFail(self,
     #                b: abi.Account,
